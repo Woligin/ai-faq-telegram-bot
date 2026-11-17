@@ -44,8 +44,16 @@ function createBot({ tg, chunks, adminId = '', limitPerMinute = 10, now = () => 
     stats.messages++;
     await tg.sendChatAction(chat, 'typing');
     const found = kb.search(chunks, text);
-    const res = await ai.answer(text, found, hist.get(chat) || []);
-    if (!found.length) stats.unknown++; else if (res.source === 'ai') stats.ai++; else stats.rules++;
+    // No keyword match (for example the question is in another language than the FAQ): with a small FAQ and an AI
+    // model available, give the model the whole FAQ and let it decide; it says "I do not know" if the answer is absent.
+    const ctx = (!found.length && ai.enabled() && chunks.length <= 8) ? chunks : found;
+    let res = await ai.answer(text, ctx, hist.get(chat) || []);
+    if (ctx !== found && res.source !== 'ai') {
+      // The whole FAQ was sent but the model failed: retry once, never answer with an unrelated keyword section.
+      res = await ai.answer(text, ctx, hist.get(chat) || []);
+      if (res.source !== 'ai') res = { text: 'Sorry, I cannot answer right now. Please try again in a minute or contact support.', source: 'rules' };
+    }
+    if (!ctx.length) stats.unknown++; else if (res.source === 'ai') stats.ai++; else stats.rules++;
     const h = hist.get(chat) || []; h.push({ role: 'user', text }, { role: 'bot', text: res.text }); hist.set(chat, h.slice(-6));
     return tg.sendMessage(chat, res.text);
   }
